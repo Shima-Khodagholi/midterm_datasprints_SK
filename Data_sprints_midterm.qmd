@@ -3,25 +3,155 @@ title: "Data_sprint"
 author: "Shima Khodagholi"
 format: html
 editor: source
+warning: FALSE
+message: FALSE
 ---
 
-## Quarto
 
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+Research Question: Are they more frequent in the summer or winter?
 
-## Running Code
 
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+# Introduction
 
-```{r}
-1 + 1
-```
+The dataset includes the location data (decimalLatitude and decimalLongitude) along with the months which includes the month when numbats were observed in the corresponding location. With this information, we can understand the frequency of numbats in each season. 
 
-You can add options to executable code like this
+# Analysis
+
+First, I fix the data with the code provided in the class to deal with the NA weather data that we had. Then, I group the months to add a season column that helps creating a dataset with the frequency of observations. Finally, I make a plot of seasonal/monthly variations and map the observations in each season.
 
 ```{r}
-#| echo: false
-2 * 2
-```
+# I used the code given in the class for this part.
 
-The `echo: false` option disables the printing of code (only output is displayed).
+#Numbats
+library(tidyverse)
+
+#install.packages("weatherOz")
+library(weatherOz)
+
+numbat_data<-read_csv("numbats.csv") %>%
+  filter(!is.na(eventDate)) %>%
+  mutate(event_day=date(with_tz(eventDate,"Australia/Sydney")),
+         event_oz=format(event_day,"%Y%m%d"))
+
+#Only look up weather for records the database can handle
+numbat_query<-numbat_data %>%
+  filter(event_day>=as.Date("1889-01-01") & is.na(decimalLatitude)==FALSE)
+
+numbat_wx<-function(row_sel){
+  numbat_sel<-numbat_query[row_sel,]
+  
+  get_data_drill(
+    longitude=numbat_sel$decimalLongitude,
+    latitude=numbat_sel$decimalLatitude,
+    start_date=numbat_sel$event_oz,
+    end_date=numbat_sel$event_oz,
+    values     = c("max_temp", "min_temp", "rain"),
+    api_key    = "jshannon@uga.edu"
+  ) %>%
+    mutate(recordID=numbat_sel$recordID) %>%
+    select(-c(longitude,latitude,year,month,day,date))
+}
+
+weather_data<-map_df(1:nrow(numbat_query),numbat_wx)
+
+#Join back to the full dataset 
+numbat_weather<-numbat_data %>%
+  left_join(weather_data,by="recordID")
+
+```
+```{r}
+# Here, I add a season column and used case_when() to have the seasonal observations.
+# Australian seasons are arranged differently so I searched online to get months for each season.
+
+numbat_weather<-numbat_weather %>%
+  mutate(season=case_when(
+    month %in% c("Dec","Jan","Feb") ~ "Summer",
+    month %in% c("Mar","Apr","May") ~ "Autumn",
+    month %in% c("Jun","Jul","Aug") ~ "Winter",
+    month %in% c("Sep","Oct","Nov") ~ "Spring"),
+    season=factor(season,levels=c("Summer","Autumn","Winter","Spring")),
+    month=factor(month,levels=month.abb))
+
+# Getting the counts of observations per season
+season_count<-numbat_weather %>%
+  count(season) %>%
+  mutate(pct=n/sum(n)*100)
+
+season_count
+```
+Numbats are seen most frequently in the Spring followed by Summer, and they are seen least frequent in Winter and Autumn. The difference between these two groups is so large.
+
+
+```{r}
+
+# Plotting the monthly/seasonal variations.
+season_colors<-c("Summer"="darkred","Autumn"="darkorange","Winter"="darkblue","Spring"="darkgreen")
+
+ggplot(numbat_weather,aes(x=month,fill=season))+
+  geom_bar()+
+  scale_fill_manual("Season",values=season_colors)+
+  labs(title="Numbat sightings by month",
+       x="Month",y="Number of sightings")+
+  theme_minimal()
+```
+The plot shows that the observations are highest in November and December and lowest in April. Autumn has the lowest observations and Spring has the highest observations.
+
+
+```{r}
+
+
+library(sf)
+library(tmap)
+
+#Australia shape can be taken from the World dataset that comes with tmap. 
+data("World")
+australia<-World %>%
+  filter(name=="Australia") %>%
+  st_transform(4326)
+
+# Spatial dataset to see seasonal locations. 
+numbat_season<-numbat_weather %>%
+  filter(is.na(decimalLatitude)==FALSE) %>%
+  mutate(season=case_when(
+    month(event_day) %in% c(12,1,2) ~ "Summer",
+    month(event_day) %in% c(3,4,5) ~ "Autumn",
+    month(event_day) %in% c(6,7,8) ~ "Winter",
+    month(event_day) %in% c(9,10,11) ~ "Spring")) %>%
+  st_as_sf(coords=c("decimalLongitude","decimalLatitude"),crs=4326,remove=FALSE)
+
+
+#Summer
+map1<-tm_shape(australia)+
+  tm_polygons(fill="grey")+
+tm_shape(numbat_season %>% filter(season=="Summer"))+
+  tm_dots(size=0.2,fill="darkred",fill_alpha=0.5)+
+tm_title("Summer")
+
+
+#Autumn
+map2<-tm_shape(australia)+
+  tm_polygons(fill="grey")+
+tm_shape(numbat_season %>% filter(season=="Autumn"))+
+  tm_dots(size=0.2,fill="darkorange",fill_alpha=0.5)+
+tm_title("Autumn")
+
+
+#Winter
+map3<-tm_shape(australia)+
+  tm_polygons(fill="grey")+
+tm_shape(numbat_season %>% filter(season=="Winter"))+
+  tm_dots(size=0.2,fill="darkblue",fill_alpha=0.5)+
+tm_title("Winter")
+
+
+#Spring
+map4<-tm_shape(australia)+
+  tm_polygons(fill="grey")+
+tm_shape(numbat_season %>% filter(season=="Spring"))+
+  tm_dots(size=0.2,fill="darkgreen",fill_alpha=0.5)+
+tm_title("Spring")
+
+
+tmap_arrange(map1,map2,map3,map4,ncol=2)
+```
+The spatial variation of observations shows that they mostly appear around the same location in southwest and south-southeast. However, in Spring we can also see some observations in the center. We saw earlier that the frequency was the highest in the Spring, suggesting that Spring has both the highest frequency in both spatial variations and numbers.
